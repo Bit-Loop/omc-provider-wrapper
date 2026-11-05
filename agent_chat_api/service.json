@@ -1,0 +1,172 @@
+{
+  "service_id": "agent_chat_api",
+  "description": "Standalone HTTP API that wraps local Codex and Claude Code chat CLIs.",
+  "runtime_boundary": "Standalone runtime modules use the Python standard library and launch providers with exact subprocess argv lists.",
+  "default_provider": "codex",
+  "fallback_providers": [
+    "codex",
+    "claude"
+  ],
+  "endpoints": [
+    {
+      "method": "GET",
+      "path": "/health"
+    },
+    {
+      "method": "GET",
+      "path": "/api/health"
+    },
+    {
+      "method": "GET",
+      "path": "/providers"
+    },
+    {
+      "method": "GET",
+      "path": "/api/providers"
+    },
+    {
+      "method": "POST",
+      "path": "/api/chat"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/chat/completions"
+    }
+  ],
+  "provider_defaults": {
+    "shell_allowed": false,
+    "codex": {
+      "command": [
+        "codex",
+        "exec"
+      ],
+      "sandbox": "read-only",
+      "ephemeral": true,
+      "dangerous_sandboxes_env": "CHAT_API_ALLOW_DANGEROUS_SANDBOXES"
+    },
+    "claude": {
+      "command": [
+        "claude",
+        "-p"
+      ],
+      "json_output": true,
+      "tools": "",
+      "permission_mode": "dontAsk"
+    }
+  },
+  "run_command": [
+    "python3",
+    "-m",
+    "agent_chat_api.app",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "8787",
+    "--workspace-root",
+    "$PWD"
+  ],
+  "health_check": {
+    "method": "GET",
+    "url": "http://127.0.0.1:8787/health",
+    "ready_requires": [
+      "CHAT_API_KEY or explicit development-only unauthenticated mode",
+      "successful default-provider version and authentication probes"
+    ]
+  },
+  "model_prefixes": [
+    "claude:sonnet",
+    "claude:opus",
+    "codex:gpt-5.5",
+    "codex:gpt-5.6"
+  ],
+  "request_controls": {
+    "workspace_root_env": "CHAT_API_WORKSPACE_ROOT",
+    "auth_env": "CHAT_API_KEY",
+    "auth_required_for_post_by_default": true,
+    "unauthenticated_dev_override_env": "CHAT_API_ALLOW_UNAUTHENTICATED_POSTS",
+    "loopback_host_header_required": true,
+    "browser_origin_must_be_loopback": true,
+    "post_content_type": "application/json",
+    "max_request_body_bytes_default": 1048576,
+    "max_concurrent_requests_default": 8,
+    "socket_io_timeout_seconds_default": 15,
+    "request_id_required": true,
+    "include_raw_redacts_session_and_token_fields": true,
+    "safe_guard_default": true,
+    "persistent_conversations_opt_in_field": "conversation_id"
+  },
+  "request_fields": [
+    "provider",
+    "prompt",
+    "messages",
+    "model",
+    "cwd",
+    "timeout_seconds",
+    "dry_run",
+    "stream",
+    "fallback",
+    "include_raw",
+    "safe_guard",
+    "conversation_id",
+    "persist",
+    "allow_tools",
+    "claude_tools",
+    "claude_permission_mode",
+    "codex_sandbox",
+    "codex_ephemeral"
+  ],
+  "streaming_events": [
+    "meta",
+    "provider_event",
+    "delta",
+    "done",
+    "error"
+  ],
+  "environment": {
+    "CHAT_API_KEY": "required bearer token for POST routes in production/default operation",
+    "CHAT_API_ALLOW_UNAUTHENTICATED_POSTS": "development/test-only override; false by default and never intended for production",
+    "CHAT_API_DEFAULT_PROVIDER": "default provider name",
+    "CHAT_API_FALLBACK_PROVIDERS": "ordered fallback provider list",
+    "CHAT_API_PROVIDER_FALLBACK_ENABLED": "enable automatic fallback",
+    "CHAT_API_AUDIT_LOG": "redacted provider fallback audit JSONL path",
+    "CHAT_API_TIMEOUT_SECONDS": "default provider timeout",
+    "CHAT_API_MAX_PROMPT_CHARS": "maximum accepted prompt length",
+    "CHAT_API_MAX_REQUEST_BODY_BYTES": "maximum accepted JSON request body in bytes; defaults to 1048576 and is capped at 16777216",
+    "CHAT_API_MAX_CONCURRENT_REQUESTS": "maximum concurrent HTTP request threads; defaults to 8 and is capped at 128",
+    "CHAT_API_SOCKET_IO_TIMEOUT_SECONDS": "per-operation socket I/O timeout in seconds; defaults to 15 and is capped at 300",
+    "CHAT_API_PROVIDER_PROBE_TIMEOUT_SECONDS": "bounded timeout for provider version and local authentication-status readiness probes",
+    "CHAT_API_WORKSPACE_ROOT": "root that constrains request cwd values",
+    "CHAT_API_RATE_LIMIT_ENABLED": "enable fixed-window live request limits",
+    "CHAT_API_RATE_LIMIT_WINDOW_SECONDS": "rate limit window",
+    "CHAT_API_RATE_LIMIT_REQUESTS": "requests per window"
+  },
+  "rate_limits": {
+    "live_requests_only": true,
+    "dry_run_health_and_providers_exempt": true,
+    "default_window_seconds": 60,
+    "default_requests": 30
+  },
+  "generated_markdown": {
+    "path": "runtime/test-results",
+    "pattern": "test-results-*.md",
+    "latest": "latest.md",
+    "ingest_allowed": false,
+    "operational_retrieval_allowed": false
+  },
+  "test_runner": {
+    "command": [
+      "python3",
+      "-B",
+      "run_test_suite.py"
+    ],
+    "discovers": "tests/test*.py",
+    "live_models": false
+  },
+  "lifecycle_owner": "user_service_or_foreground",
+  "provider_reference_sources": [
+    "OpenAI Codex non-interactive mode docs: codex exec, JSON events, --output-last-message.",
+    "OpenAI Codex GitHub README: local Codex CLI installation and CLI role.",
+    "Claude Code CLI docs: claude -p, JSON output, --tools, permission mode flags.",
+    "Anthropic claude-agent-sdk-python README: async query shape and separate concerns for tool permissions and tool availability."
+  ]
+}

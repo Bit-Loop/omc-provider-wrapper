@@ -1,0 +1,13 @@
+{
+  "omc": {
+    "repository": "https://github.com/Yeachan-Heo/oh-my-claudecode",
+    "commit": "0564555b63dfedd158669c6799d53743abd7d6bf",
+    "version": "5.7.31",
+    "archive_sha256": "17bba2af23c3252ccd928614ac8d49ac82ead5d77f7e3d05f61c8249f4c0be92"
+  },
+  "providers": {
+    "claude": "@anthropic-ai/claude-code@2.1.310",
+    "codex": "@openai/codex@0.166.0"
+  },
+  "runtime": { "python": ">=3.12", "node": ">=22", "python_packages": [] }
+}

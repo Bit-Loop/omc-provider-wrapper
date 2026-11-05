@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omc-provider-wrapper"
+version = "1.0.0"
+description = "Local Claude and Codex provider wrapper with OMC integration"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest==9.0.2", "pytest-subtests==0.15.0"]
+
+[project.scripts]
+omc-wrapper-api = "agent_chat_api.app:main"
+
+[tool.setuptools.packages.find]
+include = ["agent_chat_api*"]
+
+[tool.setuptools.package-data]
+agent_chat_api = ["service.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["agent_chat_api/tests"]

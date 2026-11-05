@@ -1,0 +1,34 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, statSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+test('configuration preserves user hooks and credentials on reinstall and backs up a replaced launcher', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'omc-configure-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const root = join(dir, 'app with spaces'), cfg = join(dir, 'config'), bin = join(dir, 'bin'), claude = join(dir, 'claude');
+  for (const path of [root, cfg, bin, claude]) mkdirSync(path);
+  writeFileSync(join(claude, 'settings.json'), JSON.stringify({ model: 'custom', hooks: { PostToolUse: [{ hooks: [{ type: 'command', command: 'existing-user-hook' }] }] } }));
+  writeFileSync(join(bin, 'omc'), '#!/bin/sh\necho previous\n');
+  const args = [fileURLToPath(new URL('./configure-install.mjs', import.meta.url)), root, cfg, bin, '/fixture/claude', '/fixture/codex', '/fixture/python', claude, '18788'];
+  const env = { ...process.env, HOME: dir, XDG_CONFIG_HOME: join(dir, 'xdg-config'), XDG_STATE_HOME: join(dir, 'state') };
+  const first = spawnSync(process.execPath, args, { env, encoding: 'utf8' });
+  assert.equal(first.status, 0, first.stderr);
+  const credential = readFileSync(join(cfg, 'service.env'), 'utf8');
+  assert.equal(statSync(join(cfg, 'service.env')).mode & 0o777, 0o600);
+  const second = spawnSync(process.execPath, [...args.slice(0, -1), '19888'], { env, encoding: 'utf8' });
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(readFileSync(join(cfg, 'service.env'), 'utf8'), credential);
+  const installed = JSON.parse(readFileSync(join(cfg, 'install.json'), 'utf8'));
+  assert.equal(installed.url, 'http://127.0.0.1:18788');
+  const settings = JSON.parse(readFileSync(join(claude, 'settings.json'), 'utf8'));
+  assert.equal(settings.model, 'custom');
+  assert.equal(settings.hooks.PostToolUse.length, 2);
+  assert.equal(settings.hooks.PostToolUse[0].hooks[0].command, 'existing-user-hook');
+  assert.equal(settings.hooks.UserPromptSubmit.length, 1);
+  assert.equal(readdirSync(bin).filter(name => name.startsWith('omc.before-')).length, 1);
+  assert.match(readFileSync(join(bin, 'omc'), 'utf8'), /# omc-provider-wrapper launcher/);
+});

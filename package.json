@@ -1,0 +1,10 @@
+{
+  "name": "omc-provider-wrapper",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Native Claude and Codex routing, model selection and provider status for OMC",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "scripts": { "test": "node --test omc/*.test.mjs scripts/*.test.mjs" }
+}

@@ -1,0 +1,48 @@
+name: Test
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install system prerequisites
+        run: sudo apt-get update && sudo apt-get install -y tmux build-essential curl
+      - name: Install and verify pinned application dependencies in an isolated home
+        shell: bash
+        run: |
+          test_root="$RUNNER_TEMP/wrapper-install"
+          mkdir -p "$test_root/home"
+          {
+            echo "HOME=$test_root/home"
+            echo "XDG_CONFIG_HOME=$test_root/config"
+            echo "XDG_DATA_HOME=$test_root/data"
+            echo "XDG_STATE_HOME=$test_root/state"
+            echo "CLAUDE_CONFIG_DIR=$test_root/claude"
+            echo "CODEX_HOME=$test_root/codex"
+            echo "OMC_WRAPPER_CONFIG_DIR=$test_root/config/omc-provider-wrapper"
+            echo "OMC_WRAPPER_BIN_DIR=$test_root/bin"
+            echo "OMC_WRAPPER_PLUGIN_ROOT=$test_root/data/omc-provider-wrapper/upstream"
+            echo "OMC_WRAPPER_PORT=18789"
+          } >> "$GITHUB_ENV"
+      - name: Exercise installer twice before changing PATH
+        run: |
+          ./install.sh --no-service --install-providers
+          ./install.sh --no-service --install-providers
+      - name: Verify installed offline HTTP routes and credentials
+        run: |
+          systemd-analyze --user verify "$XDG_CONFIG_HOME/systemd/user/omc-provider-wrapper.service"
+          node scripts/smoke-installed.mjs
+      - name: Python and native integration tests
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -e '.[test]'
+          .venv/bin/python -B -m pytest -q
+          npm test
