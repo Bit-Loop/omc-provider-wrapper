@@ -5,7 +5,7 @@ import { createServer } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { claudeDir, configRoot, installation, nativeBinaries, openCodeDir } from './installation.mjs';
+import { claudeDir, configRoot, installation, nativeBinary, openCodeDir } from './installation.mjs';
 import { DEFAULT_OLLAMA_URL, isClaudeModel, isOpenCodeModel, loadProviderConfig, permitted, routeSlug } from './provider-config.mjs';
 
 export const MARKER = 'omc-provider-wrapper generated';
@@ -21,7 +21,7 @@ export function omcCommand(env = process.env, home = homedir()) {
   const { bin_dir: bin } = installation(env, home);
   return bin ? join(bin, 'omc') : 'omc';
 }
-export function openCodeBinary(env = process.env, home = homedir()) { return nativeBinaries(env, home).opencode ?? null; }
+export function openCodeBinary(env = process.env, home = homedir()) { return nativeBinary('opencode', env, home); }
 
 function atomicWrite(filename, content) {
   mkdirSync(dirname(filename), { recursive: true });

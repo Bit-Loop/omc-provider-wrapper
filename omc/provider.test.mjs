@@ -34,6 +34,17 @@ test('permitted patterns treat only * as special and ignore variants', () => {
   assert.equal(permitted('a/b#high', ['a/b']), true);
 });
 
+test('provider settings work with only OpenCode on PATH and without any native CLI', async t => {
+  const { home, env, run, overlay } = fixture(t);
+  delete env.OMC_WRAPPER_OPENCODE_BIN;
+  env.PATH = join(home, 'bin');
+  await run('model', 'openrouter/z-ai/glm-5.3');
+  assert.equal(overlay().model, 'openrouter/z-ai/glm-5.3');
+  env.PATH = '';
+  await applyProviderConfig({ env, home, reload: false });
+  assert.equal(overlay().model, 'openrouter/z-ai/glm-5.3');
+});
+
 test('an allow-list disables every other catalog model, because whitelist is not enforced', () => {
   const config = { ...loadProviderConfig({}, '/nonexistent'), opencode: { allowed_models: ['openrouter/z-ai/*'], apis: null, default_model: 'openrouter/z-ai/glm-5.3' } };
   const overlay = renderOverlay(config, { catalog: CATALOG });
