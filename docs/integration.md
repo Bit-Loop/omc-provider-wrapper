@@ -32,6 +32,19 @@ The standalone export also includes HTTP fixes found during publication review: 
 
 Run profiles pin model selections and real binary paths, so OMC workers retain routing even when upstream filters environment variables. Profiles and status files are private; provider commands, model IDs and provider-auth configuration are local inputs. Do not share run profiles or status files blindly.
 
+Team startup is supervised by the wrapper. A failed worker launch gets one immediate
+`recover-worker` attempt while healthy workers keep their tasks and panes. JSON
+startup results include `startupRecovery`, `waitAllowed` and `nextAction`; unresolved
+startup returns nonzero with `waitAllowed:false` and `nextAction:recover-or-reassign`.
+Only confirmed startup/recovery enters the ordinary wait path. Preserve launch exit
+status instead of piping it through `tail` or `head`.
+
+Recovery reuses the owner-private run profile adjacent to the worker's recorded
+provider shim. Creating a fresh command profile would change the shim path and
+trigger OMC's `launch_descriptor_unresolvable` check. The recorded model, provider
+and workspace are retained; upstream pane/process ownership checks remain in force.
+The custom OpenCode launcher, service and credentials are not replaced by this path.
+
 `omc models set claude MODEL`, `omc models set codex MODEL`, and interactive `select` save defaults. Put `--claude-model` and `--codex-model` before any OMC command for per-run selections. `ask` also accepts leading `--model` and `--effort`. Custom IDs are passed through; availability and entitlement are decided by the provider. Native in-process Claude subagents retain Claude's own model controls (`CLAUDE_CODE_SUBAGENT_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`).
 
 ## Signals and limits

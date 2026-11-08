@@ -2,6 +2,12 @@
 
 Runtime tests use offline provider fixtures, private temporary homes, and local loopback servers. They do not need provider accounts or make model calls.
 
+`node --test omc/team-recovery.test.mjs` exercises the real wrapper frontend against
+an offline OMC fixture. It covers recorded-profile reuse, immediate failed-start
+recovery, healthy-worker preservation, an unresolved recovery returning no-wait
+guidance, and owner-private profile validation. Native routing tests separately
+exercise the installed binaries with private fixtures.
+
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e '.[test]'

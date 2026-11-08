@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { pluginRoot } from './runtime.mjs';
 import { checkWrappedClaude, isNativeLaunch } from './launch-preflight.mjs';
 import { installation } from './installation.mjs';
+import { isTeamStart, startTeamWithRecovery, teamRecoveryProfile } from './team-recovery.mjs';
 import { PROVIDERS, modelConfigPath, savedModels, selectedModels, saveModels, knownModels,
   extractSelectors, createRunProfile, wrapperStatus, selector } from './models.mjs';
 
@@ -65,7 +66,11 @@ export async function main(originalArgs = process.argv.slice(2)) {
     args.splice(at, 0, '--plugin-dir', root);
   }
   process.env.OMC_ASK_ADVISOR_SCRIPT ||= fileURLToPath(new URL('./advisor.mjs', import.meta.url));
-  const profile = createRunProfile({ ...selectedModels(), ...parsed.models });
+  const recovery = await teamRecoveryProfile(root, args);
+  if (recovery && Object.entries(parsed.models).some(([provider, model]) => model !== recovery.run.models[provider])) {
+    throw new Error('Recovery retains the recorded worker model; change routes through a new assignment.');
+  }
+  const profile = recovery || createRunProfile({ ...selectedModels(), ...parsed.models });
   if (isNativeLaunch(args)) checkWrappedClaude(profile);
   Object.assign(process.env, profile.env);
   for (const provider of PROVIDERS) {
@@ -73,6 +78,10 @@ export async function main(originalArgs = process.argv.slice(2)) {
   }
   if (parsed.requestModel !== undefined) process.env.OMC_WRAPPER_REQUEST_MODEL = parsed.requestModel;
   if (parsed.effort !== undefined) process.env.OMC_WRAPPER_REQUEST_EFFORT = parsed.effort;
+  if (isTeamStart(args)) {
+    process.exitCode = await startTeamWithRecovery(root, args, process.env);
+    return;
+  }
   process.argv = [process.argv[0], process.argv[1], ...args];
   await import(pathToFileURL(join(root, 'bridge', 'cli.cjs')).href);
 }
