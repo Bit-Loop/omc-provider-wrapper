@@ -47,7 +47,13 @@ _VALUE_OPTIONS = {
     "codex": {"--config", "-c", "--enable", "--disable", "--image", "-i", "--local-provider",
         "--profile", "-p", "--sandbox", "-s", "--ask-for-approval", "-a", "--cd", "-C", "--add-dir",
         "--color", "--output-last-message", "-o", "--output-schema"},
+    "opencode": {"--agent", "--server", "--session", "-s", "--format", "--file", "-f", "--title",
+        "--prompt", "--log-level"},
 }
+# Model options exist only on these native subcommands.
+_MODEL_SUBCOMMANDS = {"codex": {"exec", "e", "resume", "fork"}, "opencode": {"run"}}
+# OpenCode keeps its own model when the user has never selected one.
+_NATIVE_DEFAULT = "default"
 
 
 class NativeCLIError(ValueError):
@@ -123,7 +129,7 @@ def load_run(path: Path, provider: str) -> dict[str, Any]:
     if not resolved.is_file() or not os.access(resolved, os.X_OK):
         raise NativeCLIError("native provider binary is not executable")
     shims = {Path(__file__).resolve()}
-    shims.update((provider_path / name).resolve() for name in ("claude", "codex"))
+    shims.update((provider_path / name).resolve() for name in _VALUE_OPTIONS)
     if resolved in shims or resolved.is_relative_to(provider_path.resolve()):
         raise NativeCLIError("native provider binary resolves to a wrapper shim")
     return data
@@ -213,6 +219,8 @@ def prepare_arguments(provider: str, arguments: list[str], run: dict[str, Any],
     utility = any(group[0] in {"--help", "-h", "--version", "-v"} for group in options)
     first_command = next((group[0] for group in options if not group[0].startswith("-")), None)
     utility |= first_command in _UTILITIES
+    # The TUI and server commands have no model option; they keep OpenCode's own selection.
+    utility |= provider == "opencode" and first_command != "run"
     if utility:
         # Even utilities may carry an explicit native model option. Leave those
         # options exactly as supplied and remove only our private override.
@@ -227,15 +235,17 @@ def prepare_arguments(provider: str, arguments: list[str], run: dict[str, Any],
     if provider == "claude":
         cleaned = [item for group in _argument_groups(provider, cleaned)
                    for item in (["--dangerously-skip-permissions"] if group == ["--yolo"] else group)]
-    # exec/resume/fork have their own model option scope in native Codex.
+    if selected == _NATIVE_DEFAULT:
+        return cleaned, None, False
+    # A subcommand has its own model option scope.
     position = 0
-    if provider == "codex":
+    if provider in _MODEL_SUBCOMMANDS:
         for group in _argument_groups(provider, cleaned):
             if group[0] == "--":
                 break
             position += len(group)
             if not group[0].startswith("-"):
-                if group[0] not in {"exec", "e", "resume", "fork"}:
+                if group[0] not in _MODEL_SUBCOMMANDS[provider]:
                     position = 0
                 break
         else:
@@ -350,6 +360,15 @@ def normalize_event(provider: str, event: Any) -> list[dict[str, Any]]:
             return [*result, {"type": "turn.completed"}]
         if subtype == "error":
             return [_error(payload)]
+        return []
+    if provider == "opencode":
+        part = event.get("part")
+        if kind == "text" and isinstance(part, dict):
+            return [{"type": "text", "part": {"text": _text(part.get("text")), "messageID": part.get("messageID")}}]
+        failure = event.get("error")
+        if kind == "error" and isinstance(failure, dict):
+            return [{"type": "error", "error": {"type": _text(failure.get("type"), 160),
+                                                "message": _text(failure.get("message"))}}]
         return []
     if kind == "assistant" and provider == "claude":
         message = event.get("message")
@@ -679,6 +698,8 @@ def supervise(provider: str, arguments: list[str], run_file: Path, run: dict[str
               requested: str) -> int:
     job_id = str(uuid.uuid4())
     environment = child_environment(run, run_file, job_id)
+    if provider == "opencode":
+        environment.setdefault("OPENCODE_NO_AUTOLLAMA", "1")
     cwd, started = os.getcwd(), _now()
     interactive = os.isatty(0) and os.isatty(1)
     saved_terminal = termios.tcgetattr(0) if interactive else None
@@ -831,7 +852,7 @@ def supervise(provider: str, arguments: list[str], run_file: Path, run: dict[str
 
 def main(arguments: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Supervise a native provider from an owned OMC launch profile.")
-    parser.add_argument("--provider", choices=("claude", "codex"), required=True)
+    parser.add_argument("--provider", choices=tuple(_VALUE_OPTIONS), required=True)
     parser.add_argument("--run-file", type=Path, required=True)
     parser.add_argument("native_arguments", nargs=argparse.REMAINDER)
     parsed = parser.parse_args(arguments)

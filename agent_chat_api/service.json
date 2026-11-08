@@ -1,6 +1,6 @@
 {
   "service_id": "agent_chat_api",
-  "description": "Standalone HTTP API that wraps local Codex and Claude Code chat CLIs.",
+  "description": "Standalone HTTP API that wraps local Codex, Claude Code and OpenCode chat CLIs.",
   "runtime_boundary": "Standalone runtime modules use the Python standard library and launch providers with exact subprocess argv lists.",
   "default_provider": "codex",
   "fallback_providers": [
@@ -52,6 +52,17 @@
       "json_output": true,
       "tools": "",
       "permission_mode": "dontAsk"
+    },
+    "opencode": {
+      "command": [
+        "opencode",
+        "run",
+        "--standalone",
+        "--format",
+        "json"
+      ],
+      "agent": "omc-advisor",
+      "permissions": "deny-all"
     }
   },
   "run_command": [

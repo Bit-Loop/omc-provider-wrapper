@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--host", help="Bind host, default from CHAT_API_HOST or 127.0.0.1")
     parser.add_argument("--port", type=int, help="Bind port, default from CHAT_API_PORT or 8787")
     parser.add_argument("--workspace-root", help="Constrain request cwd values to this directory")
-    parser.add_argument("--default-provider", choices=["claude", "codex"], help="Provider used when a request omits provider")
+    parser.add_argument("--default-provider", choices=["claude", "codex", "opencode"], help="Provider used when a request omits provider")
     args = parser.parse_args(argv)
 
     settings = Settings.from_env()

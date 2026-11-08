@@ -19,7 +19,7 @@
 #     environment with defaults for local development.
 #   - `resolved_session_store_path()` / `resolved_audit_log_path()`: Return the
 #     effective runtime file locations even when optional overrides are absent.
-#   - `provider_paths()`: Reports only configured Codex and Claude binaries that
+#   - `provider_paths()`: Reports only configured Codex, Claude and OpenCode binaries that
 #     resolve to executable files; `ChatRunner` performs the bounded version
 #     version and authentication-status probes used for readiness.
 # Main Functions:
@@ -113,6 +113,7 @@ class Settings:
     socket_io_timeout_seconds: int = 15
     codex_bin: str = "codex"
     claude_bin: str = "claude"
+    opencode_bin: str = "opencode"
     provider_probe_timeout_seconds: int = 3
     allow_dangerous_sandboxes: bool = False
     session_store_path: Path | None = None
@@ -160,6 +161,7 @@ class Settings:
             ),
             codex_bin=os.getenv("CHAT_API_CODEX_BIN") or shutil.which("codex") or "codex",
             claude_bin=os.getenv("CHAT_API_CLAUDE_BIN") or shutil.which("claude") or "claude",
+            opencode_bin=os.getenv("CHAT_API_OPENCODE_BIN") or shutil.which("opencode") or "opencode",
             provider_probe_timeout_seconds=_env_int("CHAT_API_PROVIDER_PROBE_TIMEOUT_SECONDS", 3),
             allow_dangerous_sandboxes=_env_bool("CHAT_API_ALLOW_DANGEROUS_SANDBOXES", False),
             session_store_path=Path(session_path).expanduser().resolve() if session_path else workspace_root / "runtime" / "sessions.json",
@@ -188,4 +190,5 @@ class Settings:
         return {
             "codex": executable_path(self.codex_bin),
             "claude": executable_path(self.claude_bin),
+            "opencode": executable_path(self.opencode_bin),
         }

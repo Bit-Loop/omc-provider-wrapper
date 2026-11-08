@@ -7,7 +7,12 @@
   },
   "providers": {
     "claude": "@anthropic-ai/claude-code@2.1.310",
-    "codex": "@openai/codex@0.166.0"
+    "codex": "@openai/codex@0.166.0",
+    "opencode_proven": "2.0.24"
   },
-  "runtime": { "python": ">=3.12", "node": ">=22", "python_packages": [] }
+  "runtime": {
+    "python": ">=3.12",
+    "node": ">=22",
+    "python_packages": []
+  }
 }

@@ -137,11 +137,11 @@ class ConfigTests(unittest.TestCase):
 
     def test_provider_paths_report_missing_absolute_binary(self) -> None:
         settings = Settings(workspace_root=PACKAGE_ROOT, codex_bin="/missing/codex", claude_bin="/missing/claude")
-        self.assertEqual(settings.provider_paths(), {"codex": None, "claude": None})
+        self.assertEqual({k: settings.provider_paths()[k] for k in ("codex", "claude")}, {"codex": None, "claude": None})
 
     def test_provider_paths_reject_existing_non_executable_files(self) -> None:
         settings = Settings(workspace_root=PACKAGE_ROOT, codex_bin=str(Path(__file__)), claude_bin=str(Path(__file__)))
-        self.assertEqual(settings.provider_paths(), {"codex": None, "claude": None})
+        self.assertEqual({k: settings.provider_paths()[k] for k in ("codex", "claude")}, {"codex": None, "claude": None})
 
 
 if __name__ == "__main__":

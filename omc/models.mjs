@@ -3,9 +3,14 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve, delimiter } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { nativeBinaries, configRoot } from './installation.mjs';
+import { claudeDir, nativeBinaries, configRoot, openCodeDir } from './installation.mjs';
+import { loadProviderConfig, saveProviderConfig } from './provider-config.mjs';
 
-export const PROVIDERS = ['claude', 'codex'];
+export const PROVIDERS = ['claude', 'codex', 'opencode'];
+// OpenCode's default belongs to providers.json, which renders it into OpenCode.
+const FILE_PROVIDERS = ['claude', 'codex'];
+// Selected when nothing configures OpenCode, so it keeps its own choice.
+export const OPENCODE_NATIVE_DEFAULT = 'default';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export function nativeStateRoot(env = process.env, home = homedir()) {
@@ -38,14 +43,18 @@ function tomlModels(content) {
 }
 
 function nativeConfigFiles(env, home) {
-  function root(configured, fallback) {
-    const directory = configured || fallback;
-    return directory === '~' ? home : directory.startsWith('~/') ? join(home, directory.slice(2)) : resolve(directory);
-  }
+  const codexHome = env.CODEX_HOME || join(home, '.codex');
   return {
-    claude: join(root(env.CLAUDE_CONFIG_DIR, join(home, '.claude')), 'settings.json'),
-    codex: join(root(env.CODEX_HOME, join(home, '.codex')), 'config.toml'),
+    claude: join(claudeDir(env, home), 'settings.json'),
+    codex: join(codexHome === '~' ? home : codexHome.startsWith('~/') ? join(home, codexHome.slice(2)) : resolve(codexHome), 'config.toml'),
+    opencode: join(openCodeDir(env, home), 'opencode.json'),
   };
+}
+
+function openCodeNativeModel(content) {
+  let model;
+  try { model = JSON.parse(content || '{}').model; } catch { return undefined; }
+  return model?.providerID ? `${model.providerID}/${model.model}` : model;
 }
 
 export function nativeModels(home = homedir(), env = process.env) {
@@ -55,34 +64,41 @@ export function nativeModels(home = homedir(), env = process.env) {
   const claude = claudeText ? JSON.parse(claudeText).model : undefined;
   // Only the root table sets the native default; profile models are listed separately.
   const codex = tomlModels((codexText || '').split(/^\s*\[/m)[0])[0];
-  return { claude: selector(claude || 'opus'), codex: selector(codex || 'gpt-6-sol') };
+  return { claude: selector(claude || 'opus'), codex: selector(codex || 'gpt-6-sol'),
+    opencode: selector(openCodeNativeModel(readOptional(files.opencode)) || OPENCODE_NATIVE_DEFAULT) };
 }
 
 export function savedModels(env = process.env, home = homedir()) {
   const defaults = nativeModels(home, env);
+  const opencode = selector(loadProviderConfig(env, home).opencode.default_model ?? defaults.opencode);
   const content = readOptional(modelConfigPath(env, home));
-  if (!content) return defaults;
+  if (!content) return { ...defaults, opencode };
   const document = JSON.parse(content);
   const models = document.models || document;
-  return Object.fromEntries(PROVIDERS.map(provider => [provider, selector(models[provider] ?? defaults[provider])]));
+  return { ...Object.fromEntries(FILE_PROVIDERS.map(provider => [provider, selector(models[provider] ?? defaults[provider])])), opencode };
 }
 
 export function saveModels(models, env = process.env, home = homedir()) {
   const filename = modelConfigPath(env, home);
-  const validated = Object.fromEntries(PROVIDERS.map(provider => [provider, selector(models[provider])]));
+  const validated = Object.fromEntries(FILE_PROVIDERS.map(provider => [provider, selector(models[provider])]));
+  // Saving another provider's model must not pin OpenCode to what it inherits today.
+  if (models.opencode !== undefined && models.opencode !== savedModels(env, home).opencode) {
+    const config = loadProviderConfig(env, home);
+    saveProviderConfig({ ...config, opencode: { ...config.opencode, default_model: selector(models.opencode) } }, env, home);
+  }
   mkdirSync(dirname(filename), { recursive: true, mode: 0o700 });
   chmodSync(dirname(filename), 0o700);
   const temporary = `${filename}.${randomUUID()}.tmp`;
   writeFileSync(temporary, JSON.stringify({ schema_version: 1, models: validated }, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
   renameSync(temporary, filename);
-  return validated;
+  return { ...validated, opencode: savedModels(env, home).opencode };
 }
 
 export function readRunProfile(env = process.env) {
   if (!env.OMC_WRAPPER_RUN_FILE) return null;
   const run = JSON.parse(readFileSync(env.OMC_WRAPPER_RUN_FILE, 'utf8'));
   if (run.schema_version !== 1 || !UUID.test(run.run_id) || !run.models) throw new Error('Invalid OMC wrapper run profile.');
-  for (const provider of PROVIDERS) selector(run.models[provider]);
+  for (const provider of FILE_PROVIDERS) selector(run.models[provider]);
   return run;
 }
 
@@ -102,7 +118,7 @@ export function requestSelection(provider, env = process.env, home = homedir()) 
   if (!PROVIDERS.includes(provider)) throw new Error('Unsupported wrapper provider.');
   const model = selector(env.OMC_WRAPPER_REQUEST_MODEL ?? selectedModels(env, home)[provider]);
   const effort = env.OMC_WRAPPER_REQUEST_EFFORT;
-  return { model, ...(effort === undefined ? {} : { effort: selector(effort, 'Effort') }) };
+  return { ...(provider === 'opencode' && model === OPENCODE_NATIVE_DEFAULT ? {} : { model }), ...(effort === undefined ? {} : { effort: selector(effort, 'Effort') }) };
 }
 
 export function knownModels(env = process.env, home = homedir()) {
@@ -114,6 +130,7 @@ export function knownModels(env = process.env, home = homedir()) {
   return {
     claude: [...new Set(['opus', 'sonnet', 'haiku', ...configuredClaude, saved.claude, selected.claude])],
     codex: [...new Set([...tomlModels(readOptional(files.codex)), saved.codex, selected.codex])],
+    opencode: [...new Set([...(loadProviderConfig(env, home).opencode.allowed_models ?? []), saved.opencode, selected.opencode])],
   };
 }
 
@@ -201,14 +218,15 @@ export function createRunProfile(models, env = process.env, options = {}) {
   const run = {
     schema_version: 1, run_id: runId, launch_id: launchId,
     workspace: resolve(options.cwd || process.cwd()),
-    models: Object.fromEntries(PROVIDERS.map(provider => [provider, selector(models[provider])])),
+    models: { ...Object.fromEntries(FILE_PROVIDERS.map(provider => [provider, selector(models[provider])])),
+      opencode: selector(models.opencode ?? OPENCODE_NATIVE_DEFAULT) },
     native_binaries: options.nativeBinaries || nativeBinaries(env, home, inherited?.native_binaries),
     state_dir: resolve(env.OMC_WRAPPER_STATE_DIR || inherited?.state_dir || join(nativeStateRoot(env, home), 'native')),
     provider_path: directory,
   };
   const filename = join(directory, 'run.json');
   writeFileSync(filename, JSON.stringify(run, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
-  for (const provider of PROVIDERS) symlinkSync(options.providerShim || fileURLToPath(new URL('./provider-cli.sh', import.meta.url)), join(directory, provider));
+  for (const provider of Object.keys(run.native_binaries)) symlinkSync(options.providerShim || fileURLToPath(new URL('./provider-cli.sh', import.meta.url)), join(directory, provider));
   return { run, filename, env: { ...env, PATH: [directory, env.PATH || ''].join(delimiter),
     OMC_WRAPPER_RUN_FILE: filename, OMC_WRAPPER_RUN_ID: runId, OMC_WRAPPER_STATE_DIR: run.state_dir } };
 }

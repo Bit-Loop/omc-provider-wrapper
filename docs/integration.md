@@ -18,6 +18,17 @@ All custom integration code is included here. The bundled [Linux compiler fix](.
 2. Normalize plugin hook commands for portable Node discovery.
 3. Approve only the locked `better-sqlite3` install script, then explicitly rebuild and verify its native module. Force upstream's contained-filesystem build on Linux and verify that module and `@ast-grep/napi` load locally.
 
+Team preparation also patches the distributed tmux module and all four standalone
+team bundles. Worker launch uses `command env` so shell functions such as grc's
+`env` cannot pipe away the native terminal. Detached team windows start at 200
+columns and at least 12 rows per intended worker, rather than tmux's 80×24 default.
+Runtime v2 passes the intended count even though it initially allocates only the
+leader pane. Preallocated teams rebalance after each split so later splits cannot
+exhaust a progressively halved pane. These patches preserve upstream server
+identity, resource ownership, and rollback checks; preparation validates every
+team entry point before writing any team changes and is safe to repeat. Attached
+teams retain the invoking terminal's window size.
+
 `omc setup --plugin-dir-mode` configures upstream hooks, HUD and `CLAUDE.md`. The wrapper launches the pinned local plugin using upstream `--plugin-dir`. This avoids replacing an unrelated marketplace checkout. Existing settings and launchers are backed up.
 
 The standalone export also includes HTTP fixes found during publication review: streaming drains both pipes concurrently, enforces the prepared deadline, and reaps the process group on timeout/cancellation; malformed message elements return a request error. Native telemetry uses the public package's XDG state directory. Tests cover these changes.

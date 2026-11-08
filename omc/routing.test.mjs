@@ -11,6 +11,7 @@ import { selector, savedModels, saveModels, selectedModels, requestSelection, kn
   extractSelectors, createRunProfile, wrapperStatus } from './models.mjs';
 import { wrapperRequest } from './advisor.mjs';
 import { pluginRoot } from './runtime.mjs';
+import { openCodeInvocation, openCodeLaunchEnvironment } from './omc.mjs';
 
 const directory = mkdtempSync(join(tmpdir(), 'omc-routing-'));
 const home = join(directory, 'home');
@@ -27,8 +28,8 @@ const launcher = fileURLToPath(new URL('./omc.mjs', import.meta.url));
 test.after(() => rmSync(directory, { recursive: true, force: true }));
 
 test('model defaults come from native settings; custom IDs persist exactly with private permissions', () => {
-  assert.deepEqual(savedModels(env, home), { claude: 'claude-local-fixture', codex: 'codex-local-fixture' });
-  const models = { claude: 'custom/claude@preview', codex: ' vendor/model exact ' };
+  assert.deepEqual(savedModels(env, home), { claude: 'claude-local-fixture', codex: 'codex-local-fixture', opencode: 'default' });
+  const models = { claude: 'custom/claude@preview', codex: ' vendor/model exact ', opencode: 'default' };
   assert.deepEqual(saveModels(models, env, home), models);
   assert.deepEqual(savedModels(env, home), models);
   assert.equal(statSync(configFile).mode & 0o777, 0o600);
@@ -46,7 +47,7 @@ test('active Claude and Codex config roots supply defaults and listed IDs with t
   writeFileSync(join(codexRoot, 'config.toml'), 'model = "active-codex-default"\n[profiles.review]\nmodel = "active-codex-profile"\n');
   const active = { OMC_WRAPPER_MODEL_CONFIG: join(directory, 'active-models.json'),
     CLAUDE_CONFIG_DIR: '~/active-claude', CODEX_HOME: '~/active-codex' };
-  const expected = { claude: 'active-claude-default', codex: 'active-codex-default' };
+  const expected = { claude: 'active-claude-default', codex: 'active-codex-default', opencode: 'default' };
   assert.deepEqual(savedModels(active, home), expected);
   assert.deepEqual(selectedModels(active, home), expected);
   assert.deepEqual(selectedModels({ ...active, CLAUDE_CONFIG_DIR: claudeRoot, CODEX_HOME: codexRoot }, home), expected);
@@ -75,16 +76,16 @@ test('request selectors take precedence over provider env, run profile and saved
 test('explicit native model environment is preserved below wrapper overrides and inherited profiles', () => {
   const native = { ...env, ANTHROPIC_MODEL: 'native-anthropic', CLAUDE_MODEL: 'native-claude',
     OMC_CODEX_DEFAULT_MODEL: 'native-codex', OMC_EXTERNAL_MODELS_DEFAULT_CODEX_MODEL: 'native-external-codex', OMC_MODEL_HIGH: 'tier-only' };
-  assert.deepEqual(selectedModels(native, home), { claude: 'native-anthropic', codex: 'native-codex' });
+  assert.deepEqual(selectedModels(native, home), { claude: 'native-anthropic', codex: 'native-codex', opencode: 'default' });
   assert.deepEqual(selectedModels({ ...env, CLAUDE_MODEL: 'native-claude', OMC_EXTERNAL_MODELS_DEFAULT_CODEX_MODEL: 'native-external-codex' }, home),
-    { claude: 'native-claude', codex: 'native-external-codex' });
+    { claude: 'native-claude', codex: 'native-external-codex', opencode: 'default' });
   assert.deepEqual(selectedModels({ ...env, OMC_MODEL_HIGH: 'tier-only' }, home), savedModels(env, home));
   const filename = join(directory, 'native-env-profile.json');
   writeFileSync(filename, JSON.stringify({ schema_version: 1, run_id: randomUUID(), models: { claude: 'inherited-claude', codex: 'inherited-codex' } }));
   const inherited = { ...native, OMC_WRAPPER_RUN_FILE: filename };
-  assert.deepEqual(selectedModels(inherited, home), { claude: 'inherited-claude', codex: 'inherited-codex' });
+  assert.deepEqual(selectedModels(inherited, home), { claude: 'inherited-claude', codex: 'inherited-codex', opencode: 'default' });
   assert.deepEqual(selectedModels({ ...inherited, OMC_WRAPPER_CLAUDE_MODEL: 'wrapper-claude', OMC_WRAPPER_CODEX_MODEL: 'wrapper-codex' }, home),
-    { claude: 'wrapper-claude', codex: 'wrapper-codex' });
+    { claude: 'wrapper-claude', codex: 'wrapper-codex', opencode: 'default' });
 });
 
 test('local Claude modelSettings IDs are listed with aliases and exact custom selections', () => {
@@ -108,6 +109,43 @@ test('advisor selector parsing preserves role options and literal prompt flags',
   assert.deepEqual(extractSelectors(['--claude-model', 'override', 'models', 'set', 'claude', '--codex-model=literal']).args, ['models', 'set', 'claude', '--codex-model=literal']);
   assert.equal(extractSelectors(['launch', '--model', 'native', '--prompt', 'ask']).models.claude, 'native');
   assert.throws(() => extractSelectors(['ask', 'codex', '--model', '--prompt', 'hello']), /Missing value/);
+});
+
+test('opencode re-enters through tmux, then runs standalone with permission bypass in the pane', () => {
+  const self = ['/usr/bin/node', '/opt/omc/omc.mjs'];
+  const original = ['--claude-model', 'opus', 'opencode', '--continue'];
+  assert.deepEqual(openCodeInvocation(original, ['--continue'], { PATH: '/bin', OMC_WRAPPER_CONFIG_DIR: '/cfg' }, '/repo', undefined, self),
+    ['tmux', ['new-session', '-A', '-s', 'omc-opencode', '-c', '/repo', '-e', 'OMC_WRAPPER_CONFIG_DIR=/cfg', '-e', 'PATH=/bin',
+      ...self, ...original]]);
+  const tmux = { TMUX: '/tmp/tmux-1000/default,1,0' };
+  assert.deepEqual(openCodeInvocation(original, ['--continue'], tmux, '/repo', '/bin/opencode', self),
+    ['/bin/opencode', ['--standalone', '--auto', '--continue']]);
+  assert.deepEqual(openCodeInvocation([], ['--auto'], tmux, '/repo', '/bin/opencode', self), ['/bin/opencode', ['--standalone', '--auto']]);
+  assert.throws(() => openCodeInvocation([], [], tmux, '/repo', undefined, self), /OpenCode was not found/);
+});
+
+test('OpenCode launch model reaches its per-process config without changing other settings', () => {
+  const env = { OPENCODE_CONFIG_CONTENT: JSON.stringify({ theme: 'existing' }), UNRELATED: 'retained' };
+  const child = openCodeLaunchEnvironment(env, 'fixture/override#max');
+  assert.deepEqual(JSON.parse(child.OPENCODE_CONFIG_CONTENT), { theme: 'existing', model: 'fixture/override#max' });
+  assert.equal(child.UNRELATED, env.UNRELATED);
+  assert.deepEqual(JSON.parse(env.OPENCODE_CONFIG_CONTENT), { theme: 'existing' });
+  assert.equal(openCodeLaunchEnvironment(env, 'default'), env);
+});
+
+test('the OpenCode launcher passes an explicit model to its native process', () => {
+  const fake = join(directory, 'capture-opencode');
+  const captured = join(directory, 'opencode-launch.json');
+  writeFileSync(fake, `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(captured)}, process.env.OPENCODE_CONFIG_CONTENT || '{}');\n`, { mode: 0o755 });
+  const child = spawnSync(process.execPath, [launcher, '--opencode-model', 'fixture/override#max', 'opencode'], {
+    env: { HOME: home, PATH: '/usr/bin:/bin', TMUX: '/fixture/tmux',
+      OMC_WRAPPER_CONFIG_DIR: join(directory, 'launch-config'),
+      OMC_WRAPPER_STATE_DIR: join(directory, 'launch-state'),
+      OMC_WRAPPER_CLAUDE_BIN: '/bin/true', OMC_WRAPPER_CODEX_BIN: '/bin/true', OMC_WRAPPER_OPENCODE_BIN: fake,
+      OPENCODE_CONFIG_CONTENT: JSON.stringify({ theme: 'existing' }) }, encoding: 'utf8', timeout: 10000,
+  });
+  assert.equal(child.status, 0, child.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(captured, 'utf8')), { theme: 'existing', model: 'fixture/override#max' });
 });
 
 test('native launch model flag is preserved and sets Claude run model', () => {

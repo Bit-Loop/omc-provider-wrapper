@@ -17,6 +17,8 @@ import uuid
 
 import pytest
 
+from agent_chat_api.native_cli import normalize_event, prepare_arguments
+
 
 CLI = Path(__file__).resolve().parents[1] / "native_cli.py"
 FAKE = r'''
@@ -91,8 +93,9 @@ def launch(tmp_path):
     binary.chmod(0o700)
     run_file = directory / "run.json"
     run = {"schema_version": 1, "run_id": str(uuid.uuid4()), "launch_id": str(uuid.uuid4()),
-           "workspace": str(workspace), "models": {"claude": "claude-selected", "codex": "codex-selected"},
-           "native_binaries": {"claude": str(binary), "codex": str(binary)},
+           "workspace": str(workspace),
+           "models": {"claude": "claude-selected", "codex": "codex-selected", "opencode": "opencode-selected"},
+           "native_binaries": {"claude": str(binary), "codex": str(binary), "opencode": str(binary)},
            "state_dir": str(tmp_path / "state"), "provider_path": str(directory)}
     run_file.write_text(json.dumps(run))
     run_file.chmod(0o600)
@@ -478,3 +481,53 @@ def test_oversized_stdout_is_forwarded_without_unbounded_metadata(launch):
     assert result.returncode == 0 and result.stdout == raw
     assert jobs(launch)[0].stat().st_size < 10000
     assert job(launch)["provider_status"]["actual_model"] is None
+
+
+def opencode_run(run=None):
+    return {"models": {"claude": "c", "codex": "x", "opencode": "openrouter/z-ai/glm-5.3"}, **(run or {})}
+
+
+def test_opencode_model_is_injected_only_after_run():
+    arguments, selected, utility = prepare_arguments("opencode", ["run", "--format", "json", "hello"], opencode_run(), {})
+    assert arguments == ["run", "--model", "openrouter/z-ai/glm-5.3", "--format", "json", "hello"]
+    assert (selected, utility) == ("openrouter/z-ai/glm-5.3", False)
+
+
+def test_opencode_explicit_model_wins_outside_team_workers():
+    arguments, selected, _ = prepare_arguments("opencode", ["run", "-m", "ollama/x", "hello"], opencode_run(), {})
+    assert selected == "ollama/x"
+    assert arguments.count("--model") == 1 and "ollama/x" in arguments
+
+
+@pytest.mark.parametrize("args", [[], ["serve"], ["models"], ["service", "status"], ["auth", "list"], ["--version"], ["--continue"]])
+def test_opencode_tui_and_server_commands_stay_untouched(args):
+    arguments, selected, utility = prepare_arguments("opencode", args, opencode_run(), {})
+    assert (arguments, selected, utility) == (args, None, True)
+
+
+def test_opencode_without_a_selection_keeps_its_own_default():
+    run = opencode_run({"models": {"opencode": "default"}})
+    arguments, selected, utility = prepare_arguments("opencode", ["run", "hello"], run, {})
+    assert (arguments, selected, utility) == (["run", "hello"], None, False)
+
+
+def test_opencode_events_keep_answers_and_errors_only():
+    text = {"type": "text", "part": {"text": "PONG", "messageID": "m", "sessionID": "s", "secret": "x"}}
+    assert normalize_event("opencode", text) == [{"type": "text", "part": {"text": "PONG", "messageID": "m"}}]
+    failure = {"type": "error", "error": {"type": "provider.auth", "message": "nope", "response": {"body": "raw"}}}
+    assert normalize_event("opencode", failure) == [{"type": "error", "error": {"type": "provider.auth", "message": "nope"}}]
+    assert normalize_event("opencode", {"type": "step_start"}) == []
+
+
+def test_opencode_run_is_supervised_with_its_selected_model(launch):
+    result = run_cli(launch, "opencode", ["run", "--format", "json", "hello"])
+    assert result.returncode == 0, result.stderr
+    assert capture(launch)["args"] == ["run", "--model", "opencode-selected", "--format", "json", "hello"]
+    record = job(launch)
+    assert (record["provider"], record["requested_model"], record["job_state"]) == ("opencode", "opencode-selected", "exited")
+
+
+def test_opencode_tui_is_not_given_a_model_or_a_job(launch):
+    result = run_cli(launch, "opencode", ["--continue"])
+    assert result.returncode == 0, result.stderr
+    assert capture(launch)["args"] == ["--continue"]

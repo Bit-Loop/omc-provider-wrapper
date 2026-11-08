@@ -15,7 +15,7 @@ sudo pacman -S python nodejs npm curl tar tmux base-devel
 sudo dnf install python3 nodejs npm curl tar tmux make gcc-c++
 ```
 
-The installer checks versions before changing configuration. It installs OMC from the commit and SHA-256 in `dependencies.json`, runs its locked production dependency install, and explicitly builds its SQLite/contained-filesystem native components. Existing native Claude and Codex executables are reused. Missing CLIs are installed into a private npm prefix using the versions in `dependencies.json`.
+The installer checks versions before changing configuration. It installs OMC from the commit and SHA-256 in `dependencies.json`, runs its locked production dependency install, and explicitly builds its SQLite/contained-filesystem native components. Existing native Claude and Codex executables are reused. Missing CLIs are installed into a private npm prefix using the versions in `dependencies.json`. OpenCode is optional and is never installed for you; it is used if found on `PATH`.
 
 If matching development headers are absent from the Node installation, the installer downloads the exact running Node version's headers from nodejs.org and checks its published SHA-256. For a custom Node build, set `OMC_WRAPPER_NODE_HEADERS` to an existing directory containing `node_api.h`.
 
@@ -47,7 +47,7 @@ If CLIs were already installed, use `claude auth login` and `codex login`. The i
 | `CLAUDE_CONFIG_DIR` | `~/.claude` |
 | `CODEX_HOME` | Native Codex default |
 
-Set these before running the installer. Reinstalling preserves the generated `service.env` key and service settings. Edit that file locally to change an established port, workspace or provider binary, then restart the service. Never commit it. Default HTTP provider fallback is disabled.
+Set these before running the installer. Reinstalling preserves the generated `service.env` key and service settings, plus `providers.json` and `models.json`. Use `omc provider update` to update, and `omc provider wrapper` for routing settings. Edit `service.env` locally to change an established port, workspace or provider binary, then restart the service. Never commit it. Default HTTP provider fallback is disabled.
 
 ```bash
 systemctl --user status omc-provider-wrapper
@@ -64,5 +64,7 @@ systemctl --user disable --now omc-provider-wrapper.service
 ```
 
 Remove `omc`, `omcw`, and `omc-wrapper-server` from the chosen bin directory only if they contain the `omc-provider-wrapper launcher` marker. Restore any adjacent `*.before-omc-provider-wrapper-*` launcher you want to use. Remove the wrapper's `status-hook.mjs` entries from Claude settings. Pre-install copies of Claude settings, `CLAUDE.md`, and OMC config are in the wrapper config directory's `backups/` folder; restore them only after reviewing any later changes. OMC setup also adds files under the Claude configuration directory; compare that backup and upstream's setup documentation if removing OMC itself.
+
+To remove the provider integration, delete `~/.config/opencode/opencode.jsonc`, `~/.config/opencode/commands/model.md` and `commands/provider.md`, `~/.claude/skills/provider/`, and `~/.claude/agents/omc-route-*.md`. Hermes keeps the settings written to its config; restore them with `hermes config set`.
 
 Remove the `omc-provider-wrapper.service` unit from `~/.config/systemd/user/`, run `systemctl --user daemon-reload`, and remove the app installation directory. Retain the config/state directories if you want to preserve your local credential and history. Native provider account configuration is managed by the native CLIs.

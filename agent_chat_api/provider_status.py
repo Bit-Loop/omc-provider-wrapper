@@ -120,6 +120,11 @@ def collect_provider_status(*, provider: str, requested_model: str | None, raw_j
             elif item.get("type") == "error" and isinstance(item.get("message"), str):
                 # Native Codex ModelRerouted and warnings use nonfatal error items.
                 routing_notice(item["message"], "provider_event")
+        if kind == "text" and provider == "opencode":
+            part = event.get("part")
+            if isinstance(part, dict) and part.get("text"):
+                last_answer_index = event_index
+                structured_success = exit_code == 0
         if kind in {"result", "response.completed"}:
             model_seen(event.get("model"), "result_event")
         usage = event.get("modelUsage")

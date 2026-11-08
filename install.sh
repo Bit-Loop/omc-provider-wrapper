@@ -29,6 +29,10 @@ node -e 'if (+process.versions.node.split(".")[0] < 22) throw Error("Node 22+ re
 for value in "$install_dir" "$config_dir" "$bin_dir" "$claude_dir"; do
   [[ $value == /* && $value != *$'\n'* && $value != *'"'* && $value != *'\'* ]] || { printf 'Use absolute installation paths without quotes, backslashes or newlines.\n' >&2; exit 1; }
 done
+for name in OPENCODE_CONFIG_DIR OMC_WRAPPER_PROVIDER_CONFIG; do
+  value=${!name:-}
+  [[ -z $value || ( $value == /* && $value != *$'\n'* && $value != *$'\r'* && $value != *'"'* && $value != *'\'* ) ]] || { printf '%s must be an absolute path without double quotes, backslashes or newlines.\n' "$name" >&2; exit 1; }
+done
 [[ $install_dir != "$source_dir" ]] || { printf 'Install destination must differ from source.\n' >&2; exit 1; }
 mkdir -p "$install_dir" "$config_dir" "$bin_dir"
 backup_dir="$config_dir/backups/$(date +%Y%m%dT%H%M%S)-$$"
@@ -113,6 +117,8 @@ resolve_provider() {
 }
 native_claude=$(resolve_provider claude)
 native_codex=$(resolve_provider codex)
+native_opencode=$(command -v opencode || true)
+if [[ -z $native_opencode ]]; then printf 'OpenCode not found; continuing without it. Install it, then rerun this script.\n'; fi
 for provider in claude codex; do
   if [[ -z $(command -v "$provider" || true) && ! -e $bin_dir/$provider && ! -L $bin_dir/$provider ]]; then
     native_path=$native_claude
@@ -126,7 +132,7 @@ export CLAUDE_CONFIG_DIR="$claude_dir"
 export OMC_PLUGIN_ROOT="$install_dir/upstream"
 printf 'Configuring OMC hooks and plugin support (backups: %s)...\n' "$backup_dir"
 node "$install_dir/upstream/bridge/cli.cjs" setup --plugin-dir-mode --quiet
-node "$install_dir/scripts/configure-install.mjs" "$install_dir" "$config_dir" "$bin_dir" "$native_claude" "$native_codex" "$(command -v python3)" "$claude_dir" "$port"
+node "$install_dir/scripts/configure-install.mjs" "$install_dir" "$config_dir" "$bin_dir" "$native_claude" "$native_codex" "$(command -v python3)" "$claude_dir" "$port" "$native_opencode" "$source_dir"
 if [[ $start_service == yes ]]; then
   if command -v systemctl >/dev/null && systemctl --user show-environment >/dev/null 2>&1; then
     systemctl --user daemon-reload
@@ -136,6 +142,8 @@ if [[ $start_service == yes ]]; then
     printf 'No user systemd session. Start the API with: %s/omc-wrapper-server\n' "$bin_dir"
   fi
 fi
+# Settings outlive the install; re-rendering carries them onto the new version.
+OMC_WRAPPER_CONFIG_DIR="$config_dir" node "$install_dir/omc/omc.mjs" provider apply || printf 'Run omc provider doctor: provider settings were not re-applied.\n' >&2
 printf '\nInstalled. Add %s to PATH, then run:\n' "$bin_dir"
-printf '  omc models select\n  omc launch\n  omc wrapper status\n'
+printf '  omc models select\n  omc provider doctor\n  omc launch\n  omc wrapper status\n'
 printf 'Provider login: claude auth login; codex login (your own accounts).\n'

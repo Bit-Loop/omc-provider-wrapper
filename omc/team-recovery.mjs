@@ -190,7 +190,7 @@ export async function startTeamWithRecovery(root, args, env = process.env, cwd =
     console.log(`${ok ? 'Team started' : 'Team start needs recovery'}: ${started.teamName}`);
     console.log(`tmux session: ${started.sessionName}`);
     for (const recovery of startupRecovery) console.log(`startup_recovery worker=${recovery.worker} outcome=${recovery.outcome}${recovery.detectedBy ? ` via=${recovery.detectedBy}` : ''}${recovery.error ? ` error=${recovery.error}` : ''}`);
-    if (!ok) console.error('Do not enter the normal wait loop. Recover or reassign the failed worker task; keep healthy workers running. GLM remains the lead.');
+    if (!ok) console.error('Do not enter the normal wait loop. Recover or reassign the failed worker task; keep healthy workers running and retain the current orchestrator.');
   }
   return ok ? 0 : 1;
 }

@@ -9,6 +9,15 @@ recovery, healthy-worker preservation, an unresolved recovery returning no-wait
 guidance, and owner-private profile validation. Native routing tests separately
 exercise the installed binaries with private fixtures.
 
+`node --test scripts/prepare-omc.test.mjs` checks the actual pinned module and
+bundles for consistent detached window sizing, the v2 leader-only startup count,
+repeatable preparation, and rejection of unfamiliar code before any team entry
+point changes. Real private tmux sessions exercise ten-worker layouts through
+both preallocation and the v2 leader-only allocation pattern, without model calls.
+Live validation should separately require five Claude workers to complete five
+distinct tasks, with no startup failures or manual window resizing, then shut
+the team down and verify its panes and runtime owner are gone.
+
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e '.[test]'

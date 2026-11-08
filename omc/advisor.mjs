@@ -53,8 +53,10 @@ function redactObject(value, key) {
   return JSON.parse(redact(JSON.stringify(value), key));
 }
 
+const WRAPPER_PROVIDERS = ['codex', 'claude', 'opencode'];
+
 export async function wrapperRequest(config, provider, prompt) {
-  if (!['codex', 'claude'].includes(provider)) throw new Error('Unsupported wrapper provider.');
+  if (!WRAPPER_PROVIDERS.includes(provider)) throw new Error('Unsupported wrapper provider.');
   try {
     const response = await fetch(new URL('/api/chat', config.endpoint), {
       method: 'POST', redirect: 'error',
@@ -154,9 +156,9 @@ async function main(args) {
     return;
   }
   const [provider, ...rest] = args;
-  if (!provider || !rest.length || !rest.join(' ').trim()) throw new Error('Usage: omc ask <codex|claude> "prompt"');
+  if (!provider || !rest.length || !rest.join(' ').trim()) throw new Error('Usage: omc ask <codex|claude|opencode> "prompt"');
   const root = pluginRoot();
-  if (!['codex', 'claude'].includes(provider)) {
+  if (!WRAPPER_PROVIDERS.includes(provider)) {
     const child = spawnSync(process.execPath, [join(root, 'scripts/run-provider-advisor.js'), ...args], {
       stdio: 'inherit', env: process.env,
     });

@@ -130,7 +130,7 @@ def _provider_output(prepared: Any) -> Iterator[tuple[str, str | int]]:
     group and reaps the provider. Pipe reads never block past the deadline.
     """
     process = subprocess.Popen(prepared.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, cwd=str(prepared.cwd), env=provider_subprocess_environment(),
+        stderr=subprocess.PIPE, cwd=str(prepared.cwd), env=provider_subprocess_environment(provider=prepared.provider),
         start_new_session=True)
     deadline = time.monotonic() + prepared.timeout
     pending = memoryview(prepared.prompt.encode("utf-8"))

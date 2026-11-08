@@ -50,7 +50,12 @@ except ModuleNotFoundError:
 
 from agent_chat_api.config import Settings
 from agent_chat_api.audit import classify_provider_failure
+from agent_chat_api.environment import provider_subprocess_environment
+from agent_chat_api.parsing import extract_stream_text, parse_provider_stdout
+from agent_chat_api.payloads import request_from_payload
+from agent_chat_api.provider_status import collect_provider_status
 from agent_chat_api.providers import (
+    _provider_authentication_probe_command,
     ChatRequest,
     ChatRunner,
     ProviderError,
@@ -683,3 +688,79 @@ print('{"result":"I cannot assist with that request."}')
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OpenCodeProviderTests(unittest.TestCase):
+    # Events are verbatim from `opencode run --format json` on OpenCode 2.0.24.
+    TEXT = ('{"type":"text","timestamp":1,"sessionID":"ses_abc","part":{"id":"prt_1","sessionID":"ses_abc",'
+            '"messageID":"msg_2","type":"text","text":"PONG","time":{"start":1,"end":2}}}\n')
+    QUOTA = ('{"type":"error","timestamp":1,"sessionID":"ses_abc","error":{"type":"provider.quota",'
+             '"message":"Free usage limit reached.","status":429}}\n')
+
+    def _settings(self) -> Settings:
+        return Settings(workspace_root=PACKAGE_ROOT, opencode_bin="/opt/opencode")
+
+    def test_read_only_requests_use_a_private_server_and_the_deny_all_agent(self) -> None:
+        prepared = ChatRunner(self._settings()).prepare(
+            ChatRequest(provider="opencode", prompt="hi", model="openrouter/z-ai/glm-5.3"), stream=False)
+        self.assertEqual(prepared.command, ["/opt/opencode", "run", "--standalone", "--format", "json",
+                                            "--agent", "omc-advisor", "--model", "openrouter/z-ai/glm-5.3"])
+        self.assertNotIn("hi", " ".join(prepared.command), "prompts must not reach argv")
+
+    def test_tools_are_only_available_on_request(self) -> None:
+        prepared = ChatRunner(self._settings()).prepare(
+            ChatRequest(provider="opencode", prompt="hi", allow_tools=True), stream=False)
+        self.assertNotIn("--agent", prepared.command)
+
+    def test_request_environment_carries_the_agent_and_blocks_gpu_autostart(self) -> None:
+        environment = provider_subprocess_environment({"PATH": "/bin", "SECRET_THING": "x"}, provider="opencode")
+        agent = json.loads(environment["OPENCODE_CONFIG_CONTENT"])["agents"]["omc-advisor"]
+        self.assertEqual(agent["permissions"], [{"action": "*", "resource": "*", "effect": "deny"}])
+        self.assertEqual(environment["OPENCODE_NO_AUTOLLAMA"], "1")
+        self.assertNotIn("SECRET_THING", environment)
+        self.assertNotIn("OPENCODE_CONFIG_CONTENT", provider_subprocess_environment({"PATH": "/bin"}))
+
+    def test_model_prefix_selects_opencode(self) -> None:
+        request = request_from_payload({"model": "opencode:ollama/qwen3:30b", "prompt": "hi"}, "codex")
+        self.assertEqual((request.provider, request.model), ("opencode", "ollama/qwen3:30b"))
+
+    def test_text_events_become_the_answer(self) -> None:
+        text, events = parse_provider_stdout("opencode", self.TEXT)
+        self.assertEqual(text, "PONG")
+        self.assertEqual(extract_stream_text(json.loads(self.TEXT)), "PONG")
+
+    def test_only_the_last_message_is_the_answer(self) -> None:
+        def line(message: str, value: str) -> str:
+            return json.dumps({"type": "text", "sessionID": "s", "part": {"messageID": message, "text": value}}) + "\n"
+        text, _ = parse_provider_stdout("opencode", line("m1", "Let me check.") + line("m2", "Fi") + line("m2", "nal"))
+        self.assertEqual(text, "Final")
+
+    def test_success_and_failure_map_to_provider_status(self) -> None:
+        text, raw = parse_provider_stdout("opencode", self.TEXT)
+        status = collect_provider_status(provider="opencode", requested_model="a/b", raw_json=raw, text=text, stderr="", exit_code=0)
+        self.assertEqual(status["outcome"], "completed")
+        self.assertIsNone(status["actual_model"], "OpenCode does not report one, so it stays unknown")
+        text, raw = parse_provider_stdout("opencode", self.QUOTA)
+        status = collect_provider_status(provider="opencode", requested_model="a/b", raw_json=raw, text=text, stderr="", exit_code=1)
+        self.assertEqual((status["outcome"], status["reason_code"]), ("failed", "provider_error"))
+        self.assertEqual(status["signals"][0]["code"], "provider.quota")
+        self.assertFalse(status["block"]["detected"], "quota is not a policy block")
+
+    def test_empty_output_is_not_success(self) -> None:
+        status = collect_provider_status(provider="opencode", requested_model=None, raw_json=None, text="", stderr="", exit_code=0)
+        self.assertEqual(status["reason_code"], "provider_empty_response")
+
+    def test_conversations_resume_the_opencode_session(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runner = ChatRunner(Settings(workspace_root=PACKAGE_ROOT, opencode_bin="/opt/opencode",
+                                         session_store_path=Path(directory) / "sessions.json"))
+            request = ChatRequest(provider="opencode", prompt="hi", conversation_id="conversation-1")
+            prepared = runner.prepare(request, stream=False)
+            self.assertNotIn("--session", prepared.command)
+            _, raw = parse_provider_stdout("opencode", self.TEXT)
+            runner._record_session_if_needed(prepared, stdout=self.TEXT, stderr="", raw_json=raw)
+            resumed = runner.prepare(request, stream=False)
+            self.assertEqual(resumed.command[resumed.command.index("--session") + 1], "ses_abc")
+
+    def test_authentication_probe_uses_auth_list(self) -> None:
+        self.assertEqual(_provider_authentication_probe_command("opencode", "/opt/opencode"), ["/opt/opencode", "auth", "list"])

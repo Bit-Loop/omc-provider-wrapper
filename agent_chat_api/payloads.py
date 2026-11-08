@@ -36,7 +36,7 @@ from typing import Any
 from .models import ChatRequest, RequestError
 
 
-PROVIDERS = {"codex", "claude"}
+PROVIDERS = {"codex", "claude", "opencode"}
 REASONING_EFFORTS = {"low", "medium", "high", "xhigh"}
 
 

@@ -78,6 +78,7 @@ def parse_provider_stdout(provider: str, stdout: str) -> tuple[str, Any]:
     answers: list[str] = []
     final: str | None = None
     recognized = False
+    opencode_message: Any = None
     for event in events:
         kind = event.get("type")
         recognized |= isinstance(kind, str)
@@ -85,6 +86,14 @@ def parse_provider_stdout(provider: str, stdout: str) -> tuple[str, Any]:
             item = event.get("item") or {}
             if isinstance(item, dict) and item.get("type") == "agent_message" and isinstance(item.get("text"), str):
                 answers.append(item["text"])
+        elif provider == "opencode" and kind == "text":
+            part = event.get("part") or {}
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                # Only the last assistant message is the answer; earlier ones precede tool calls.
+                if part.get("messageID") != opencode_message:
+                    answers.clear()
+                    opencode_message = part.get("messageID")
+                answers.append(part["text"])
         elif provider == "claude":
             if kind == "result" and isinstance(event.get("result"), str):
                 final = event["result"]
@@ -92,6 +101,8 @@ def parse_provider_stdout(provider: str, stdout: str) -> tuple[str, Any]:
                 text = content_to_text(event["message"].get("content"))
                 if text:
                     answers.append(text)
+    if provider == "opencode" and answers:
+        final = "".join(answers)
     if final is not None or answers:
         return (final if final is not None else answers[-1]).strip(), decoded
     if not recognized and provider == "claude":
@@ -118,6 +129,9 @@ def extract_stream_text(value: Any) -> str:
         return ""
     if isinstance(value.get("text"), str):
         return str(value["text"])
+    part = value.get("part")
+    if value.get("type") == "text" and isinstance(part, dict) and isinstance(part.get("text"), str):
+        return str(part["text"])
     delta = value.get("delta")
     if isinstance(delta, dict) and isinstance(delta.get("text"), str):
         return str(delta["text"])

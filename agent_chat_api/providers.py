@@ -69,6 +69,7 @@ from .commands import (
     CODEX_SANDBOXES,
     build_claude_command as _build_claude_command,
     build_codex_command as _build_codex_command,
+    build_opencode_command as _build_opencode_command,
 )
 from .config import Settings
 from .environment import provider_subprocess_environment
@@ -145,7 +146,7 @@ class ChatRunner:
             completed = subprocess.run(
                 [path, "--version"],
                 cwd=str(self.settings.workspace_root),
-                env=provider_subprocess_environment(),
+                env=provider_subprocess_environment(provider=name),
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
@@ -178,7 +179,7 @@ class ChatRunner:
             authentication = subprocess.run(
                 auth_command,
                 cwd=str(self.settings.workspace_root),
-                env=provider_subprocess_environment(),
+                env=provider_subprocess_environment(provider=name),
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
@@ -316,7 +317,7 @@ class ChatRunner:
                 prepared.command,
                 input=prepared.prompt,
                 cwd=str(prepared.cwd),
-                env=provider_subprocess_environment(),
+                env=provider_subprocess_environment(provider=prepared.provider),
                 capture_output=True,
                 text=True,
                 timeout=prepared.timeout,
@@ -508,6 +509,13 @@ class ChatRunner:
                 provider_session_id=provider_session_id,
                 session_resumed=session_resumed,
             )
+        if provider == "opencode":
+            return _build_opencode_command(
+                self.settings,
+                request,
+                provider_session_id=provider_session_id,
+                session_resumed=session_resumed,
+            )
         raise RequestError(f"Unsupported provider: {provider}")
 
     def _load_session_record(self, request: ChatRequest, *, provider: str, cwd: Path) -> SessionRecord | None:
@@ -548,6 +556,10 @@ class ChatRunner:
                     if isinstance(event, dict) and event.get("type") == "thread.started":
                         provider_session_id = _optional_string(event.get("thread_id")) or provider_session_id
                         break
+            elif prepared.provider == "opencode":
+                events = raw_json if isinstance(raw_json, list) else [raw_json]
+                provider_session_id = next((_optional_string(event.get("sessionID")) for event in events
+                                            if isinstance(event, dict) and event.get("sessionID")), None)
         if not provider_session_id:
             return
         self.session_store.save(
@@ -570,6 +582,8 @@ def _safe_default_for(name: str) -> str:
         return "non-interactive print mode with built-in tools disabled"
     if name == "codex":
         return "non-interactive exec mode with read-only sandbox"
+    if name == "opencode":
+        return "non-interactive standalone run with a deny-all agent"
     return "unknown"
 
 
@@ -578,6 +592,8 @@ def _provider_authentication_probe_command(name: str, path: str) -> list[str] | 
         return [path, "login", "status"]
     if name == "claude":
         return [path, "auth", "status"]
+    if name == "opencode":
+        return [path, "auth", "list"]
     return None
 
 

@@ -31,6 +31,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .config import Settings
+from .environment import OPENCODE_ADVISOR_AGENT
 from .models import ChatRequest, RequestError
 
 
@@ -130,4 +131,26 @@ def build_codex_command(
     if request.effort:
         command.extend(["-c", f'model_reasoning_effort="{request.effort}"'])
     command.append("-")
+    return command, warnings
+
+
+def build_opencode_command(
+    settings: Settings,
+    request: ChatRequest,
+    *,
+    provider_session_id: str | None,
+    session_resumed: bool,
+) -> tuple[list[str], list[str]]:
+    warnings: list[str] = []
+    # A private server keeps requests off the user's background service, whose
+    # process environment cannot carry the per-request advisor agent.
+    command = [settings.opencode_bin, "run", "--standalone", "--format", "json"]
+    if not request.allow_tools:
+        command.extend(["--agent", OPENCODE_ADVISOR_AGENT])
+    if session_resumed and provider_session_id:
+        command.extend(["--session", provider_session_id])
+    if request.model:
+        command.extend(["--model", request.model])
+    if request.effort:
+        warnings.append("effort is ignored for OpenCode; select a variant with provider/model#variant.")
     return command, warnings
