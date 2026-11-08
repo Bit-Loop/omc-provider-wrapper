@@ -63,12 +63,19 @@ export async function teamRecoveryProfile(root, args, env = process.env, cwd = p
     OMC_WRAPPER_RUN_FILE: filename, OMC_WRAPPER_RUN_ID: run.run_id, OMC_WRAPPER_STATE_DIR: run.state_dir } };
 }
 
-function invoke(root, args, env, cwd) {
+const START_INVOKE_TIMEOUT_MS = 600000;
+// Upstream brokers recovery through the persistent runtime owner and caps its wait at
+// 300s (api-interop.js MIN/MAX_RECOVERY_TIMEOUT_MS). Fail fast just past that instead
+// of blocking the wrapper for the full default budget on a wedged owner.
+const RECOVERY_INVOKE_TIMEOUT_MS = 330000;
+const PROBE_INVOKE_TIMEOUT_MS = 15000;
+
+function invoke(root, args, env, cwd, { timeout = START_INVOKE_TIMEOUT_MS, quiet = false } = {}) {
   const result = spawnSync(process.execPath, [join(root, 'bridge/cli.cjs'), ...args], {
-    cwd, env, encoding: 'utf8', timeout: 600000, maxBuffer: 16 * 1024 * 1024,
+    cwd, env, encoding: 'utf8', timeout, maxBuffer: 16 * 1024 * 1024,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  if (result.stderr) process.stderr.write(result.stderr);
+  if (result.stderr && !quiet) process.stderr.write(result.stderr);
   if (result.error) throw result.error;
   return result;
 }
@@ -78,6 +85,57 @@ function jsonResult(output, accepts) {
     try { const value = JSON.parse(line); if (accepts(value)) return value; } catch { /* diagnostic line */ }
   }
   throw new Error('OMC returned no structured team result; inspect its launch output before waiting.');
+}
+
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+function envInt(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+// A read-only local team state query (list-tasks, read-worker-heartbeat). It runs the
+// bridge CLI, never a provider or model, so settle checks cost nothing on the quota.
+function readEnvelope(root, operation, input, env, cwd) {
+  try {
+    const result = invoke(root, ['team', 'api', operation, '--input', JSON.stringify(input), '--json'],
+      env, cwd, { timeout: PROBE_INVOKE_TIMEOUT_MS, quiet: true });
+    return jsonResult(result.stdout, value => value?.operation === operation);
+  } catch { return null; }
+}
+
+// A missed startup-evidence signal is usually a pane that was merely busy, not a dead
+// worker. A live worker proves itself by claiming its task or writing a heartbeat; both
+// are local reads. Brokered recover-worker costs a 180-300s owner round trip and, against
+// a live worker, can only time out (recovery_request_timeout) while leaving a dangling
+// request — the thrash we must avoid — so confirm genuine death before paying for it.
+function workerStarted(root, teamName, worker, env, cwd, heartbeatMaxAgeMs) {
+  const tasks = readEnvelope(root, 'list-tasks', { team_name: teamName }, env, cwd);
+  if (tasks?.ok && Array.isArray(tasks.data?.tasks)
+    && tasks.data.tasks.some(task => task?.owner === worker
+      && ['in_progress', 'completed', 'failed'].includes(task?.status))) return true;
+  const beat = readEnvelope(root, 'read-worker-heartbeat', { team_name: teamName, worker }, env, cwd);
+  const heartbeat = beat?.ok ? beat.data?.heartbeat : null;
+  if (heartbeat?.alive === true && typeof heartbeat.last_turn_at === 'string') {
+    const age = Date.now() - Date.parse(heartbeat.last_turn_at);
+    if (Number.isFinite(age) && age >= 0 && age <= heartbeatMaxAgeMs) return true;
+  }
+  return false;
+}
+
+// Poll the cheap liveness signals for a bounded grace window so a pane-busy worker has
+// time to claim its task before we decide it is dead. Tunable for tests via env.
+async function settleStartup(root, teamName, worker, env, cwd) {
+  const window = envInt(env.OMC_TEAM_STARTUP_SETTLE_MS, 30000);
+  const interval = envInt(env.OMC_TEAM_STARTUP_SETTLE_INTERVAL_MS, 1000);
+  const heartbeatMaxAge = envInt(env.OMC_TEAM_HEARTBEAT_MAX_AGE_MS, 45000);
+  const deadline = Date.now() + window;
+  for (;;) {
+    if (workerStarted(root, teamName, worker, env, cwd, heartbeatMaxAge)) return true;
+    const left = deadline - Date.now();
+    if (left <= 0) return false;
+    await delay(Math.min(interval, left));
+  }
 }
 
 export async function startTeamWithRecovery(root, args, env = process.env, cwd = process.cwd()) {
@@ -97,6 +155,12 @@ export async function startTeamWithRecovery(root, args, env = process.env, cwd =
       remaining.push(failure);
       continue;
     }
+    // Resolve a pane-busy false alarm with cheap local reads before the costly
+    // brokered recovery; a live worker needs no replacement and would only time out.
+    if (await settleStartup(root, started.teamName, failure.worker, env, cwd)) {
+      startupRecovery.push({ worker: failure.worker, outcome: 'already_running', detectedBy: 'startup-settle' });
+      continue;
+    }
     // One immediate recovery attempt for this failed worker only. Other workers,
     // their leases and their edits remain owned by the existing team.
     try {
@@ -104,7 +168,7 @@ export async function startTeamWithRecovery(root, args, env = process.env, cwd =
         team_name: started.teamName, worker: failure.worker,
       }), '--json'];
       const profile = await teamRecoveryProfile(root, recoveryArgs, env, cwd);
-      const result = invoke(root, recoveryArgs, profile.env, cwd);
+      const result = invoke(root, recoveryArgs, profile.env, cwd, { timeout: RECOVERY_INVOKE_TIMEOUT_MS });
       const envelope = jsonResult(result.stdout, value => value?.operation === 'recover-worker');
       const outcome = envelope.ok === true ? envelope.data?.result : null;
       const recovered = outcome?.committed === true
@@ -125,7 +189,7 @@ export async function startTeamWithRecovery(root, args, env = process.env, cwd =
   else {
     console.log(`${ok ? 'Team started' : 'Team start needs recovery'}: ${started.teamName}`);
     console.log(`tmux session: ${started.sessionName}`);
-    for (const recovery of startupRecovery) console.log(`startup_recovery worker=${recovery.worker} outcome=${recovery.outcome}${recovery.error ? ` error=${recovery.error}` : ''}`);
+    for (const recovery of startupRecovery) console.log(`startup_recovery worker=${recovery.worker} outcome=${recovery.outcome}${recovery.detectedBy ? ` via=${recovery.detectedBy}` : ''}${recovery.error ? ` error=${recovery.error}` : ''}`);
     if (!ok) console.error('Do not enter the normal wait loop. Recover or reassign the failed worker task; keep healthy workers running. GLM remains the lead.');
   }
   return ok ? 0 : 1;

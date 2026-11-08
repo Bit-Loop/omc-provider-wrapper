@@ -28,7 +28,10 @@ function lab(t, scenario = 'recover', base = tmpdir()) {
   const env = { ...process.env, HOME: home, XDG_STATE_HOME: join(home, 'state'),
     OMC_WRAPPER_CONFIG_DIR: config, OMC_WRAPPER_PLUGIN_ROOT: plugin,
     OMC_WRAPPER_STATE_DIR: join(home, 'native-state'), FIXTURE_EVENTS: events,
-    FIXTURE_SCENARIO: scenario };
+    FIXTURE_SCENARIO: scenario,
+    // Keep the startup settle window tiny so dead-worker scenarios probe once and recover
+    // within the test timeout; the real default is 30s.
+    OMC_TEAM_STARTUP_SETTLE_MS: '1', OMC_TEAM_STARTUP_SETTLE_INTERVAL_MS: '10' };
   for (const key of ['OMC_WRAPPER_RUN_FILE', 'OMC_WRAPPER_RUN_ID', 'OMC_WRAPPER_CLAUDE_MODEL', 'OMC_WRAPPER_CODEX_MODEL', 'CLAUDECODE']) delete env[key];
   const original = createRunProfile({ claude: 'original-claude', codex: 'original-codex' }, env,
     { cwd, home, nativeBinaries: { claude: native, codex: native } });
@@ -47,6 +50,17 @@ const config=JSON.parse(fs.readFileSync(path.join(process.cwd(),'.omc/state/team
 const expected=path.dirname(config.workers[0].launch_descriptor.binary);
 const actual=process.env.PATH.split(path.delimiter)[0];
 fs.appendFileSync(process.env.FIXTURE_EVENTS,JSON.stringify({action,args,profile:process.env.OMC_WRAPPER_RUN_FILE,actual,expected})+'\\n');
+if(action==='list-tasks'){
+ const alive=process.env.FIXTURE_SCENARIO==='settle';
+ const tasks=alive?[{id:'2',status:'in_progress',owner:'worker-1'}]:[{id:'2',status:'pending',owner:null}];
+ console.log(JSON.stringify({ok:true,operation:'list-tasks',data:{count:tasks.length,tasks}}));
+ process.exit(0);
+}
+if(action==='read-worker-heartbeat'){
+ const worker=JSON.parse(args[args.indexOf('--input')+1]).worker;
+ console.log(JSON.stringify({ok:true,operation:'read-worker-heartbeat',data:{worker,heartbeat:null}}));
+ process.exit(0);
+}
 if(action==='recover-worker'){
  const payload=JSON.parse(args[args.indexOf('--input')+1]);
  const success=actual===expected&&payload.worker==='worker-1'&&process.env.FIXTURE_SCENARIO!=='unrecoverable';
@@ -103,8 +117,24 @@ test('a failed startup is recovered immediately and never enters the normal wait
   assert.equal(output.ok, true);
   assert.deepEqual(output.startupFailures, []);
   assert.equal(output.startupRecovery[0].outcome, 'recovered');
-  assert.deepEqual(fixture.events().map(event => event.action), ['start', 'recover-worker']);
-  assert.equal(fixture.events()[1].profile, fixture.original.filename);
+  const actions = fixture.events().map(event => event.action);
+  assert.deepEqual(actions.filter(action => action === 'start' || action === 'recover-worker'), ['start', 'recover-worker']);
+  assert.equal(fixture.events().find(event => event.action === 'recover-worker').profile, fixture.original.filename);
+});
+
+test('a pane-busy false alarm settles via local reads instead of brokered recovery', t => {
+  const fixture = lab(t, 'settle');
+  const result = fixture.run(['team', '2:claude:executor', '--json', '1. First task\n2. Second task']);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.ok, true);
+  assert.equal(output.waitAllowed, true);
+  assert.deepEqual(output.startupFailures, []);
+  assert.equal(output.startupRecovery[0].outcome, 'already_running');
+  assert.equal(output.startupRecovery[0].detectedBy, 'startup-settle');
+  const actions = fixture.events().map(event => event.action);
+  assert.ok(actions.includes('list-tasks'));
+  assert.ok(!actions.includes('recover-worker'), 'a live worker must not pay for brokered recovery');
 });
 
 test('unrecoverable startup preserves the other worker and directs reassignment rather than waiting', t => {
@@ -115,7 +145,8 @@ test('unrecoverable startup preserves the other worker and directs reassignment 
   assert.equal(output.ok, false);
   assert.equal(output.waitAllowed, false);
   assert.equal(output.nextAction, 'recover-or-reassign');
-  assert.deepEqual(fixture.events().map(event => event.action), ['start', 'recover-worker']);
+  const actions = fixture.events().map(event => event.action);
+  assert.deepEqual(actions.filter(action => action === 'start' || action === 'recover-worker'), ['start', 'recover-worker']);
   assert.deepEqual(JSON.parse(readFileSync(join(fixture.teamDir, 'config.json'))).workers[1].assigned_tasks, ['2']);
 });
 
